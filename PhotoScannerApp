@@ -1,0 +1,17 @@
+//
+//  PhotoScannerApp.swift
+//  Shared
+//
+//  Created by Sriram Venkatesan on 7/27/23.
+//
+
+import SwiftUI
+
+@main
+struct PhotoScannerApp: App {
+    var body: some Scene {
+        WindowGroup {
+            HomeView()
+        }
+    }
+}
