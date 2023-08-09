@@ -1,0 +1,679 @@
+//
+//  ContentView.swift
+//  Shared
+//
+//  Created by Sriram Venkatesan on 7/27/23.
+//
+
+import SwiftUI
+import UIKit
+import Vision
+import PhotosUI
+import CoreData
+
+
+struct HomeView: View {
+    var body: some View {
+        NavigationView {
+            VStack {
+                Text("Picture Scanner and Filter")
+                    .font(.largeTitle)
+                    .multilineTextAlignment(.center)
+                    .padding()
+
+                Spacer()
+
+                NavigationLink(destination: ScanView()) {
+                    Text("Scan")
+                        .font(.title)
+                        .padding()
+                        .background(Color.blue)
+                        .foregroundColor(.white)
+                        .cornerRadius(10)
+                }
+
+                Spacer()
+            }
+        }
+    }
+}
+
+struct ScanView: View {
+    var body: some View {
+        VStack {
+            Text("Scan")
+                .font(.largeTitle)
+                .padding()
+
+            NavigationLink(destination: AddPeopleView()) {
+                Text("Add new people to scan for")
+                    .padding()
+                    .background(Color.blue)
+                    .foregroundColor(.white)
+                    .cornerRadius(10)
+            }
+            .padding()
+
+            NavigationLink(destination: LibraryView()) {
+                Text("Library of faces")
+                    .padding()
+                    .background(Color.blue)
+                    .foregroundColor(.white)
+                    .cornerRadius(10)
+            }
+            .padding()
+
+            Spacer()
+        }
+    }
+}
+
+struct AddPeopleView: View {
+    @State var imagePickerPresented = false
+    @State var images: [UIImage] = []
+    @State var selectedImages: [Int] = []
+    @State var isSelectMode = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            ScrollView {
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: 100))]) {
+                    ForEach(images.indices, id: \.self) { index in
+                        if let img = images[index] {
+                            Image(uiImage: img)
+                                .resizable()
+                                .aspectRatio(contentMode: .fit)
+                                .padding(.top, 10)
+                                .overlay(
+                                    Rectangle()
+                                        .stroke(selectedImages.contains(index) ? Color.blue : Color.clear, lineWidth: 3)
+                                )
+                                .onTapGesture {
+                                    if isSelectMode {
+                                        if let idx = selectedImages.firstIndex(of: index) {
+                                            selectedImages.remove(at: idx)
+                                        } else {
+                                            selectedImages.append(index)
+                                        }
+                                    }
+                                }
+                        }
+                    }
+                }
+            }
+            HStack {
+                Button(action: {
+                    imagePickerPresented = true
+                }) {
+                    Text("Add new pictures")
+                        .font(.headline)
+                        .multilineTextAlignment(.leading)
+                        .padding()
+                        .background(Color.blue)
+                        .foregroundColor(.white)
+                        .cornerRadius(10)
+                }
+                .padding(.top, 5)
+                .sheet(isPresented: $imagePickerPresented, content: {
+                    PhotoPicker(selectedImages: $images)
+                })
+
+                Button(action: {
+                    if isSelectMode {
+                        // Remove images
+                        selectedImages.sort(by: >)
+                        for index in selectedImages {
+                            images.remove(at: index)
+                        }
+                        selectedImages.removeAll()
+                    }
+                    isSelectMode.toggle()
+                }) {
+                    Text(isSelectMode ? "Remove" : "Select")
+                        .font(.headline)
+                        .multilineTextAlignment(.center)
+                        .padding()
+                        .background(isSelectMode ? Color.red : Color.blue)
+                        .foregroundColor(.white)
+                        .cornerRadius(10)
+                }
+
+                NavigationLink(destination: ScanningView(images: images)) {
+                    Text("Scan")
+                        .font(.headline)
+                        .multilineTextAlignment(.trailing)
+                        .padding()
+                        .background(Color.green)
+                        .foregroundColor(.white)
+                        .cornerRadius(10)
+                }
+            }
+            .padding(.top, -20)
+        }
+    }
+}
+
+struct ScanningView: View {
+    @State var images: [UIImage?]
+    @State var detectedFaces: [UIImage?] = []
+    @State var scanningStarted = false
+    @State var scanningComplete = false
+    @State var errorMessage: String?
+    @State var currentIndex = 0
+
+    var body: some View {
+        VStack {
+            NavigationLink(destination: SelectPeopleView(faces: detectedFaces.compactMap { $0 }), isActive: $scanningComplete) {
+                EmptyView()
+            }
+
+            if let errorMessage = errorMessage {
+                ErrorView(errorMessage: errorMessage)
+            } else if scanningComplete {
+                // The faces display was removed as it's now in SelectPeopleView
+            } else if scanningStarted {
+                if currentIndex < images.count {
+                    Image(uiImage: images[currentIndex]!)
+                        .resizable()
+                        .aspectRatio(contentMode: .fit)
+                }
+                Text("Scanning...")
+                    .font(.largeTitle)
+                    .foregroundColor(.gray)
+                    .padding()
+            } else {
+                Text("Press Start Scanning to begin")
+                    .font(.largeTitle)
+                    .foregroundColor(.gray)
+                    .multilineTextAlignment(.center)
+                    .padding()
+                Button(action: startScanning, label: {
+                    Text("Start Scanning")
+                        .font(.headline)
+                        .padding()
+                        .background(Color.blue)
+                        .foregroundColor(.white)
+                        .cornerRadius(10)
+                })
+            }
+        }
+    }
+    
+    func startScanning() {
+        scanningStarted = true
+        scanImage(index: currentIndex)
+    }
+    
+    func scanImage(index: Int) {
+        DispatchQueue.global(qos: .userInitiated).async {
+            let detectFaceRequest = VNDetectFaceRectanglesRequest { request, error in
+                DispatchQueue.main.async {
+                    if let error = error {
+                        self.errorMessage = "Face detection failed with error: \(error.localizedDescription)"
+                        return
+                    }
+                    guard let results = request.results as? [VNFaceObservation] else {
+                        self.errorMessage = "Face detection failed: results are not VNFaceObservation"
+                        return
+                    }
+                    guard let cgImage = self.images[index]?.cgImage else {
+                        self.errorMessage = "Could not retrieve CGImage from UIImage"
+                        return
+                    }
+                    self.detectedFaces += results.compactMap { observation in
+                        let boundingBox = observation.boundingBox
+                        let widthIncreaseFactor: CGFloat = 1.3
+                        let heightIncreaseFactor: CGFloat = 1.4
+                        let newSize = CGSize(width: boundingBox.width * CGFloat(cgImage.width) * widthIncreaseFactor,
+                                             height: boundingBox.height * CGFloat(cgImage.height) * heightIncreaseFactor)
+                        let newOrigin = CGPoint(x: (boundingBox.minX * CGFloat(cgImage.width)) - (newSize.width - boundingBox.width * CGFloat(cgImage.width)) / 2.0,
+                                                y: ((1 - observation.boundingBox.minY) * CGFloat(cgImage.height) - newSize.height) + (newSize.height - boundingBox.height * CGFloat(cgImage.height)) / 2.0)
+                        let cropRect = CGRect(origin: newOrigin, size: newSize)
+                        guard let croppedImage = cgImage.cropping(to: cropRect) else { return nil }
+                        return UIImage(cgImage: croppedImage)
+                    }
+                    if index + 1 < self.images.count {
+                        self.currentIndex += 1
+                        self.scanImage(index: self.currentIndex)
+                    } else {
+                        self.scanningComplete = true
+                    }
+                }
+            }
+            guard let cgImage = self.images[index]?.cgImage else {
+                self.errorMessage = "Failed to get cgImage from UIImage"
+                return
+            }
+            let handler = VNImageRequestHandler(cgImage: cgImage, options: [:])
+            do {
+                try handler.perform([detectFaceRequest])
+            } catch {
+                DispatchQueue.main.async {
+                    self.errorMessage = "Failed to perform face detection request: \(error.localizedDescription)"
+                }
+                return
+            }
+        }
+    }
+}
+
+struct NoFaceFoundView: View {
+    var body: some View {
+        VStack {
+            Text("No face was found")
+                .font(.largeTitle)
+                .foregroundColor(.red)
+                .padding()
+        }
+    }
+}
+
+struct SelectPeopleView: View {
+    @State var faces: [UIImage] = []  // This will store the detected faces.
+    @State var selectedFaces: [UIImage] = []
+    @State var isNextViewActive = false
+    @State var isSelecting = false
+    @State var imagesToRemove: [UIImage] = []
+
+    let columns = [
+        GridItem(.adaptive(minimum: 100)) // You can adjust this to change the size of grid cells.
+    ]
+
+    var body: some View {
+        VStack {
+            ScrollView {
+                LazyVGrid(columns: columns, spacing: 20) {
+                    ForEach(faces.indices, id: \.self) { index in
+                        Button(action: {
+                            if isSelecting {
+                                if imagesToRemove.contains(faces[index]) {
+                                    imagesToRemove.removeAll { $0 == faces[index] }
+                                } else {
+                                    imagesToRemove.append(faces[index])
+                                }
+                            } else {
+                                if selectedFaces.contains(faces[index]) {
+                                    selectedFaces.removeAll { $0 == faces[index] }
+                                } else {
+                                    selectedFaces.append(faces[index])
+                                }
+                            }
+                        }) {
+                            Image(uiImage: faces[index])
+                                .resizable()
+                                .aspectRatio(contentMode: .fit)
+                                .padding()
+                                .overlay(isSelecting && imagesToRemove.contains(faces[index]) ? RoundedRectangle(cornerRadius: 10).stroke(Color.red, lineWidth: 2) : (selectedFaces.contains(faces[index]) ? RoundedRectangle(cornerRadius: 10).stroke(Color.blue, lineWidth: 2) : RoundedRectangle(cornerRadius: 10).stroke(Color.clear)))
+                        }
+                    }
+                }
+                .padding()
+            }
+            Button(action: {
+                isNextViewActive = true
+            }) {
+                Text("Continue")
+                    .font(.headline)
+                    .padding()
+                    .background(Color.green)
+                    .foregroundColor(.white)
+                    .cornerRadius(10)
+            }
+            .padding()
+            .disabled(selectedFaces.isEmpty)
+        }
+        .navigationTitle("Selected Faces")
+        .navigationBarTitleDisplayMode(.inline)
+        .sheet(isPresented: $isNextViewActive) {
+            FinalSelectedPicturesView(images: selectedFaces)
+        }
+    }
+}
+
+struct FinalSelectedPicturesView: View {
+    @State var imagePickerPresented = false
+    @State var images: [UIImage] = []
+    @State var selectedImages: [UIImage] = []
+    @State var isSelecting = false
+    @State var imagesToRemove: [UIImage] = []
+
+    let columns = [
+        GridItem(.adaptive(minimum: 100))
+    ]
+
+    var body: some View {
+        VStack {
+            ScrollView {
+                LazyVGrid(columns: columns, spacing: 20) {
+                    ForEach(images.indices, id: \.self) { index in
+                        Button(action: {
+                            if isSelecting {
+                                if imagesToRemove.contains(images[index]) {
+                                    imagesToRemove.removeAll { $0 == images[index] }
+                                } else {
+                                    imagesToRemove.append(images[index])
+                                }
+                            }
+                        }) {
+                            Image(uiImage: images[index])
+                                .resizable()
+                                .aspectRatio(contentMode: .fit)
+                                .padding()
+                                .overlay(isSelecting && imagesToRemove.contains(images[index]) ? RoundedRectangle(cornerRadius: 10).stroke(Color.red, lineWidth: 2) : RoundedRectangle(cornerRadius: 10).stroke(Color.clear))
+                        }
+                    }
+                }
+                .padding()
+            }
+            HStack {
+                Button(action: {
+                    isSelecting.toggle()
+                }) {
+                    Text(isSelecting ? "Cancel" : "Select")
+                        .font(.headline)
+                        .padding()
+                        .background(Color.blue)
+                        .foregroundColor(.white)
+                        .cornerRadius(10)
+                }
+                .padding()
+
+                if isSelecting {
+                    Button(action: {
+                        images.removeAll { imagesToRemove.contains($0) }
+                        isSelecting = false
+                        imagesToRemove = []
+                    }) {
+                        Text("Remove")
+                            .font(.headline)
+                            .padding()
+                            .background(Color.red)
+                            .foregroundColor(.white)
+                            .cornerRadius(10)
+                    }
+                    .padding()
+                }
+            }
+            NavigationLink(destination: AddPicturesToFilterView()) {
+                Text("Add Pictures to Filter")
+                    .font(.headline)
+                    .padding()
+                    .background(Color.green)
+                    .foregroundColor(.white)
+                    .cornerRadius(10)
+            }
+            .padding()
+//            .disabled(images.isEmpty)
+        }
+        .navigationTitle("Add Photos to Filter")
+        .navigationBarTitleDisplayMode(.inline)
+    }
+}
+
+struct AddPicturesToFilterView: View {
+    @State var imagePickerPresented = false
+    @State var images: [UIImage] = []
+    @State var selectedImages: [UIImage] = []
+    @State var isSelecting = false
+    @State var imagesToRemove: [UIImage] = []
+    @State var isNextViewActive = false
+    
+    let columns = [
+        GridItem(.adaptive(minimum: 100))
+    ]
+
+    var body: some View {
+        VStack {
+            ScrollView {
+                LazyVGrid(columns: columns, spacing: 20) {
+                    ForEach(images.indices, id: \.self) { index in
+                        Button(action: {
+                            if isSelecting {
+                                if imagesToRemove.contains(images[index]) {
+                                    imagesToRemove.removeAll { $0 == images[index] }
+                                } else {
+                                    imagesToRemove.append(images[index])
+                                }
+                            }
+                        }) {
+                            Image(uiImage: images[index])
+                                .resizable()
+                                .aspectRatio(contentMode: .fit)
+                                .padding()
+                                .overlay(isSelecting && imagesToRemove.contains(images[index]) ? RoundedRectangle(cornerRadius: 10).stroke(Color.red, lineWidth: 2) : RoundedRectangle(cornerRadius: 10).stroke(Color.clear))
+                        }
+                    }
+                }
+                .padding()
+            }
+            HStack {
+                Button(action: {
+                    imagePickerPresented = true
+                }) {
+                    Text("Add Pictures")
+                        .font(.headline)
+                        .padding()
+                        .background(Color.blue)
+                        .foregroundColor(.white)
+                        .cornerRadius(10)
+                }
+                .padding()
+                .sheet(isPresented: $imagePickerPresented, content: {
+                    PhotoPicker(selectedImages: $images)
+                })
+                
+                Button(action: {
+                    isSelecting.toggle()
+                }) {
+                    Text(isSelecting ? "Cancel" : "Select")
+                        .font(.headline)
+                        .padding()
+                        .background(Color.blue)
+                        .foregroundColor(.white)
+                        .cornerRadius(10)
+                }
+                .padding()
+
+                if isSelecting {
+                    Button(action: {
+                        images.removeAll { imagesToRemove.contains($0) }
+                        isSelecting = false
+                        imagesToRemove = []
+                    }) {
+                        Text("Remove")
+                            .font(.headline)
+                            .padding()
+                            .background(Color.red)
+                            .foregroundColor(.white)
+                            .cornerRadius(10)
+                    }
+                    .padding()
+                }
+            }
+            
+            Button(action: {
+                isNextViewActive = true
+            }) {
+                Text("Filter")
+                    .font(.headline)
+                    .padding()
+                    .background(Color.green)
+                    .foregroundColor(.white)
+                    .cornerRadius(10)
+            }
+            .padding()
+            .disabled(images.isEmpty)
+        }
+        .navigationTitle("Add Photos to Filter")
+        .navigationBarTitleDisplayMode(.inline)
+        .sheet(isPresented: $isNextViewActive) {
+            FilterScanningView(images: images, selectedFaces: selectedImages)
+        }
+    }
+}
+
+struct CheckView: View {
+    var isChecked: Bool
+
+    var body: some View {
+        ZStack {
+            if isChecked {
+                Circle()
+                    .stroke(lineWidth: 2)
+                    .foregroundColor(.blue)
+                Image(systemName: "checkmark.circle.fill")
+                    .foregroundColor(.blue)
+            } else {
+                Circle()
+                    .stroke(lineWidth: 2)
+                    .foregroundColor(.gray)
+            }
+        }
+        .padding(6)
+    }
+}
+
+struct LibraryView: View {
+
+    var body: some View {
+        VStack {
+            Text("No faces saved in the library.")
+                    .foregroundColor(.gray)
+            }
+        }
+}
+
+
+
+
+struct FilterScanningView: View {
+    @State var images: [UIImage?]  // Images from AddNeedToFilterView
+    @State var selectedFaces: [UIImage?]  // Faces from SelectPeopleView
+    @State var matchingFaces: [UIImage?] = []  // This will store the detected faces that match the selected ones.
+    @State var scanningStarted = false
+    @State var scanningComplete = false
+    @State var errorMessage: String?
+    @State var currentIndex = 0
+    
+    var body: some View {
+        VStack {
+            // ... Your UI code here ...
+        }
+    }
+}
+
+
+struct ResultsView: View {
+    var body: some View {
+        VStack {
+            Text("Results")
+                .font(.largeTitle)
+                .padding()
+
+            // Implement a List or Grid here to display the filtered pictures
+
+            Button(action: {
+                // action to save or share the pictures
+            }) {
+                Text("Save")
+                    .padding()
+                    .background(Color.blue)
+                    .foregroundColor(.white)
+                    .cornerRadius(10)
+            }
+        }
+    }
+}
+
+// PhotoPicker
+struct PhotoPicker: UIViewControllerRepresentable {
+    @Binding var selectedImages: [UIImage]
+
+    func makeUIViewController(context: UIViewControllerRepresentableContext<PhotoPicker>) -> some UIViewController {
+        var config = PHPickerConfiguration()
+        config.selectionLimit = 0 // Allow multiple selection
+        config.filter = .images
+        let picker = PHPickerViewController(configuration: config)
+        picker.delegate = context.coordinator
+        return picker
+    }
+
+    func updateUIViewController(_ uiViewController: UIViewControllerType, context: UIViewControllerRepresentableContext<PhotoPicker>) {}
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(self)
+    }
+
+    class Coordinator: NSObject, PHPickerViewControllerDelegate {
+        var parent: PhotoPicker
+
+        init(_ parent: PhotoPicker) {
+            self.parent = parent
+        }
+
+        func picker(_ picker: PHPickerViewController, didFinishPicking results: [PHPickerResult]) {
+            picker.dismiss(animated: true)
+            let itemProviders = results.map(\.itemProvider)
+            for item in itemProviders {
+                if item.canLoadObject(ofClass: UIImage.self) {
+                    item.loadObject(ofClass: UIImage.self) { (image, error) in
+                        if let uiImage = image as? UIImage {
+                            DispatchQueue.main.async {
+                                self.parent.selectedImages.append(uiImage)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+struct ImagePicker: UIViewControllerRepresentable {
+    @Environment(\.presentationMode) private var presentationMode
+    @Binding var image: UIImage?
+
+    func makeUIViewController(context: Context) -> UIImagePickerController {
+        let picker = UIImagePickerController()
+        picker.delegate = context.coordinator
+        return picker
+    }
+
+    func updateUIViewController(_ uiViewController: UIImagePickerController, context: Context) {}
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(self)
+    }
+
+    final class Coordinator: NSObject, UIImagePickerControllerDelegate, UINavigationControllerDelegate {
+        var parent: ImagePicker
+
+        init(_ parent: ImagePicker) {
+            self.parent = parent
+        }
+
+        func imagePickerController(_ picker: UIImagePickerController, didFinishPickingMediaWithInfo info: [UIImagePickerController.InfoKey : Any]) {
+            if let uiImage = info[UIImagePickerController.InfoKey.originalImage] as? UIImage {
+                parent.image = uiImage
+            }
+
+            parent.presentationMode.wrappedValue.dismiss()
+        }
+
+        func imagePickerControllerDidCancel(_ picker: UIImagePickerController) {
+            parent.presentationMode.wrappedValue.dismiss()
+        }
+    }
+}
+struct ErrorView: View {
+    let errorMessage: String
+
+    var body: some View {
+        VStack {
+            Text(errorMessage)
+                .font(.largeTitle)
+                .foregroundColor(.red)
+                .padding()
+        }
+    }
+}
